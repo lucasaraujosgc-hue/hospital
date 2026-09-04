@@ -1,0 +1,8 @@
+{
+  "name": "Painel do Hospital",
+  "description": "Análise de consultas, tempo de espera e exportação XLSX",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
