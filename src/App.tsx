@@ -5,7 +5,8 @@ import {
 } from 'recharts';
 import { 
   UploadCloud, FileSpreadsheet, Loader2, Filter, Calendar, Trash2, Settings, Download, 
-  Edit2, Save, X, Search, Clock, UserCheck, Stethoscope, RotateCcw
+  Edit2, Save, X, Search, Clock, UserCheck, Stethoscope, RotateCcw,
+  ArrowUpDown, ArrowUp, ArrowDown
 } from 'lucide-react';
 import { startOfDay, endOfDay, parseISO, format } from 'date-fns';
 import * as XLSX from 'xlsx';
@@ -57,6 +58,10 @@ export function App() {
 
   // Raw Data Search Filter
   const [searchTerm, setSearchTerm] = useState<string>('');
+
+  // Doctor Ranking Table Sorting state
+  const [doctorSortField, setDoctorSortField] = useState<'rank' | 'name' | 'atendimentos' | 'mediaEspera'>('rank');
+  const [doctorSortOrder, setDoctorSortOrder] = useState<'asc' | 'desc'>('asc');
 
   // Bulk Delete Modal state
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -197,8 +202,66 @@ export function App() {
   const waitTimeData = hasData ? getAverageWaitTimeByClassificacao(filteredData, startCol, endCol) : [];
   const appointmentsData = hasData ? getAppointmentsByClassificacao(filteredData) : [];
   const dailyVolumeData = hasData ? getDailyVolumeSummary(filteredData, startCol) : [];
-  const doctorRankingData = hasData ? getDoctorRankingSummary(filteredData, startCol, endCol) : [];
   const doctorAppointmentsData = hasData ? getAppointmentsByMedico(filteredData) : [];
+  
+  // Doctor Ranking with Original Position
+  const baseDoctorRankingData = useMemo(() => {
+    if (!hasData) return [];
+    const list = getDoctorRankingSummary(filteredData, startCol, endCol);
+    return list.map((item, idx) => ({
+      ...item,
+      originalRank: idx + 1
+    }));
+  }, [hasData, filteredData, startCol, endCol]);
+
+  // Sorted Doctor Ranking based on user selection
+  const sortedDoctorRankingData = useMemo(() => {
+    return [...baseDoctorRankingData].sort((a, b) => {
+      let comparison = 0;
+      if (doctorSortField === 'rank') {
+        comparison = a.originalRank - b.originalRank;
+      } else if (doctorSortField === 'name') {
+        comparison = a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' });
+      } else if (doctorSortField === 'atendimentos') {
+        comparison = a.atendimentos - b.atendimentos;
+      } else if (doctorSortField === 'mediaEspera') {
+        const valA = a.mediaEspera !== null ? a.mediaEspera : (doctorSortOrder === 'asc' ? Infinity : -Infinity);
+        const valB = b.mediaEspera !== null ? b.mediaEspera : (doctorSortOrder === 'asc' ? Infinity : -Infinity);
+        comparison = valA - valB;
+      }
+      return doctorSortOrder === 'asc' ? comparison : -comparison;
+    });
+  }, [baseDoctorRankingData, doctorSortField, doctorSortOrder]);
+
+  const handleDoctorSort = (field: 'rank' | 'name' | 'atendimentos' | 'mediaEspera') => {
+    if (doctorSortField === field) {
+      setDoctorSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setDoctorSortField(field);
+      setDoctorSortOrder(field === 'name' || field === 'rank' ? 'asc' : 'desc');
+    }
+  };
+
+  const handlePositionOrNameSort = () => {
+    if (doctorSortField === 'name') {
+      if (doctorSortOrder === 'asc') {
+        setDoctorSortOrder('desc');
+      } else {
+        setDoctorSortField('rank');
+        setDoctorSortOrder('asc');
+      }
+    } else if (doctorSortField === 'rank') {
+      if (doctorSortOrder === 'asc') {
+        setDoctorSortOrder('desc');
+      } else {
+        setDoctorSortField('name');
+        setDoctorSortOrder('asc');
+      }
+    } else {
+      setDoctorSortField('rank');
+      setDoctorSortOrder('asc');
+    }
+  };
 
   const toggleFilter = (setter: React.Dispatch<React.SetStateAction<Set<string>>>, value: string) => {
     setter(prev => {
@@ -765,30 +828,87 @@ export function App() {
                               <UserCheck className="w-4 h-4 text-teal-600" />
                               Ranking de Atendimentos por Médico
                             </h3>
-                            <span className="text-xs text-slate-500 font-medium">
-                              Total de Médicos: {doctorRankingData.length}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-slate-500 font-medium">
+                                Total: {sortedDoctorRankingData.length}
+                              </span>
+                            </div>
                           </div>
                           <div className="overflow-x-auto overflow-y-auto max-h-[350px] flex-1">
                             <table className="w-full text-sm text-left">
                               <thead className="bg-slate-50 text-slate-500 font-medium sticky top-0 z-10 shadow-sm">
                                 <tr>
-                                  <th className="px-5 py-3 border-b border-slate-200 bg-slate-50">Posição / Médico</th>
-                                  <th className="px-5 py-3 border-b border-slate-200 bg-slate-50 text-right">Qtd. Atendimentos</th>
-                                  <th className="px-5 py-3 border-b border-slate-200 bg-slate-50 text-right">Tempo Médio</th>
+                                  <th 
+                                    onClick={handlePositionOrNameSort}
+                                    className="px-5 py-3 border-b border-slate-200 bg-slate-50 cursor-pointer select-none hover:bg-slate-100 transition-colors group"
+                                    title="Clique para alternar ordenação por Posição (1º, 2º...) ou Nome do Médico (A-Z)"
+                                  >
+                                    <div className="flex items-center gap-1.5">
+                                      <span>Posição / Médico</span>
+                                      {doctorSortField === 'name' ? (
+                                        <span className="inline-flex items-center text-[10px] font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                                          {doctorSortOrder === 'asc' ? 'Nome A→Z' : 'Nome Z→A'}
+                                          {doctorSortOrder === 'asc' ? <ArrowUp className="w-2.5 h-2.5 ml-0.5" /> : <ArrowDown className="w-2.5 h-2.5 ml-0.5 text-teal-700" />}
+                                        </span>
+                                      ) : doctorSortField === 'rank' ? (
+                                        <span className="inline-flex items-center text-[10px] font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                                          {doctorSortOrder === 'asc' ? '1º→Último' : 'Último→1º'}
+                                          {doctorSortOrder === 'asc' ? <ArrowUp className="w-2.5 h-2.5 ml-0.5" /> : <ArrowDown className="w-2.5 h-2.5 ml-0.5 text-teal-700" />}
+                                        </span>
+                                      ) : (
+                                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 opacity-40 group-hover:opacity-100 transition-opacity" />
+                                      )}
+                                    </div>
+                                  </th>
+
+                                  <th 
+                                    onClick={() => handleDoctorSort('atendimentos')}
+                                    className="px-5 py-3 border-b border-slate-200 bg-slate-50 text-right cursor-pointer select-none hover:bg-slate-100 transition-colors group"
+                                    title="Clique para ordenar por Quantidade de Atendimentos"
+                                  >
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <span>Qtd. Atendimentos</span>
+                                      {doctorSortField === 'atendimentos' ? (
+                                        <span className="inline-flex items-center text-[10px] font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                                          {doctorSortOrder === 'desc' ? 'Maior' : 'Menor'}
+                                          {doctorSortOrder === 'asc' ? <ArrowUp className="w-2.5 h-2.5 ml-0.5" /> : <ArrowDown className="w-2.5 h-2.5 ml-0.5 text-teal-700" />}
+                                        </span>
+                                      ) : (
+                                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 opacity-40 group-hover:opacity-100 transition-opacity" />
+                                      )}
+                                    </div>
+                                  </th>
+
+                                  <th 
+                                    onClick={() => handleDoctorSort('mediaEspera')}
+                                    className="px-5 py-3 border-b border-slate-200 bg-slate-50 text-right cursor-pointer select-none hover:bg-slate-100 transition-colors group"
+                                    title="Clique para ordenar por Tempo Médio"
+                                  >
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <span>Tempo Médio</span>
+                                      {doctorSortField === 'mediaEspera' ? (
+                                        <span className="inline-flex items-center text-[10px] font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                                          {doctorSortOrder === 'desc' ? 'Maior' : 'Menor'}
+                                          {doctorSortOrder === 'asc' ? <ArrowUp className="w-2.5 h-2.5 ml-0.5" /> : <ArrowDown className="w-2.5 h-2.5 ml-0.5 text-teal-700" />}
+                                        </span>
+                                      ) : (
+                                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 opacity-40 group-hover:opacity-100 transition-opacity" />
+                                      )}
+                                    </div>
+                                  </th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {doctorRankingData.map((item, index) => (
+                                {sortedDoctorRankingData.map((item, index) => (
                                   <tr key={index} className="hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0">
                                     <td className="px-5 py-3 font-medium text-slate-700 flex items-center gap-2.5">
-                                      <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-bold ${
-                                        index === 0 ? 'bg-amber-100 text-amber-800 border border-amber-300' :
-                                        index === 1 ? 'bg-slate-200 text-slate-700 border border-slate-300' :
-                                        index === 2 ? 'bg-orange-100 text-orange-800 border border-orange-300' :
+                                      <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-bold shrink-0 ${
+                                        item.originalRank === 1 ? 'bg-amber-100 text-amber-800 border border-amber-300' :
+                                        item.originalRank === 2 ? 'bg-slate-200 text-slate-700 border border-slate-300' :
+                                        item.originalRank === 3 ? 'bg-orange-100 text-orange-800 border border-orange-300' :
                                         'bg-slate-100 text-slate-500'
                                       }`}>
-                                        {index + 1}
+                                        {item.originalRank}
                                       </span>
                                       <span className="truncate max-w-[200px]" title={item.name}>{item.name}</span>
                                     </td>
@@ -798,7 +918,7 @@ export function App() {
                                     </td>
                                   </tr>
                                 ))}
-                                {doctorRankingData.length === 0 && (
+                                {sortedDoctorRankingData.length === 0 && (
                                   <tr>
                                     <td colSpan={3} className="px-5 py-8 text-center text-slate-500">
                                       Nenhum dado encontrado para médicos com os filtros atuais.
