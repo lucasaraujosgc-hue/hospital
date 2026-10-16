@@ -1,61 +1,71 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
-  Cell, LineChart, Line
+  Cell
 } from 'recharts';
-import { UploadCloud, FileSpreadsheet, Loader2, Filter, Calendar, Trash2, Settings, Download, Edit2, Save, X, Search, Clock } from 'lucide-react';
+import { 
+  UploadCloud, FileSpreadsheet, Loader2, Filter, Calendar, Trash2, Settings, Download, 
+  Edit2, Save, X, Search, Clock, UserCheck, Stethoscope, RotateCcw
+} from 'lucide-react';
 import { startOfDay, endOfDay, parseISO, format } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { 
   ProcessedRecord, processExcelData, columnOptions, getAverageWaitTimeByClassificacao, 
-  getAppointmentsByClassificacao, getTimelineVolumeByClassificacao, parseCustomDate, getDailyVolumeSummary
+  getAppointmentsByClassificacao, getDailyVolumeSummary, parseCustomDate,
+  getDoctorRankingSummary, getAppointmentsByMedico
 } from './utils';
 
 // Tailwind colors for common classifications
 const colorMap: Record<string, string> = {
-  'Verde': '#22c55e',
-  'Amarelo': '#eab308',
-  'Laranja': '#f97316',
+  'VERMELHO': '#ef4444',
   'Vermelho': '#ef4444',
+  'LARANJA': '#f97316',
+  'Laranja': '#f97316',
+  'AMARELO': '#eab308',
+  'Amarelo': '#eab308',
+  'VERDE': '#22c55e',
+  'Verde': '#22c55e',
+  'AZUL': '#3b82f6',
   'Azul': '#3b82f6',
-  'Sem Classificação': '#94a3b8'
+  'BRANCO': '#94a3b8',
+  'Branco': '#94a3b8',
+  'Sem Classificação': '#64748b'
 };
 
-const DEFAULT_COLORS = ['#0f766e', '#0369a1', '#be123c', '#b45309', '#6d28d9', '#15803d'];
+const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
 
-export default function App() {
+export function App() {
   const [data, setData] = useState<ProcessedRecord[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  
-  // Tab state
   const [activeTab, setActiveTab] = useState<'dashboard' | 'data'>('dashboard');
 
-  // Settings state
+  // Interval column configuration
   const [startCol, setStartCol] = useState<string>('admissao');
   const [endCol, setEndCol] = useState<string>('horaClassificacao');
-  
-  // Filter state
-  const [showFilters, setShowFilters] = useState(false);
-  const [selectedColors, setSelectedColors] = useState<Set<string>>(new Set());
-  
-  // Time filter state
+
+  // Time & Duration filter state
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [minWaitTime, setMinWaitTime] = useState<string>('');
   const [maxWaitTime, setMaxWaitTime] = useState<string>('');
 
+  // Classification & Doctor Filters
+  const [selectedColors, setSelectedColors] = useState<Set<string>>(new Set());
+  const [selectedMedicos, setSelectedMedicos] = useState<Set<string>>(new Set());
+  const [medicoSearchTerm, setMedicoSearchTerm] = useState<string>('');
+
   // Raw Data Search Filter
   const [searchTerm, setSearchTerm] = useState<string>('');
 
-  // Row Edit state
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<Partial<ProcessedRecord>>({});
-
-  // Bulk Delete state
+  // Bulk Delete Modal state
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteStart, setDeleteStart] = useState<string>('');
   const [deleteEnd, setDeleteEnd] = useState<string>('');
+
+  // Inline editing state for Raw Data
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Partial<ProcessedRecord>>({});
 
   // --- API Functions ---
   const fetchRecords = async () => {
@@ -71,6 +81,7 @@ export default function App() {
         horaClassificacao: r.horaClassificacao ? new Date(r.horaClassificacao) : null,
         atendimento: r.atendimento ? new Date(r.atendimento) : null,
         fimAtendimento: r.fimAtendimento ? new Date(r.fimAtendimento) : null,
+        medico: r.medico || 'Não informado',
       }));
       
       setData(hydrated);
@@ -104,18 +115,19 @@ export default function App() {
         });
         
         if (res.ok) {
-          // Append new records to current state to avoid full refetch delay
+          // Append new records to current state
           setData(prev => [...prev, ...processed]);
           setSelectedColors(new Set());
+          setSelectedMedicos(new Set());
           setStartDate('');
           setEndDate('');
-          alert(`Importação concluída! ${processed.length} registros adicionados.`);
+          alert(`Importação concluída! ${processed.length} registros adicionados com sucesso.`);
         } else {
-          throw new Error('Falha na API');
+          throw new Error('Falha na API ao salvar');
         }
       } catch (error) {
         console.error("Error parsing Excel:", error);
-        alert("Erro ao processar o arquivo Excel e salvar no banco.");
+        alert("Erro ao processar o arquivo Excel e salvar no banco de dados.");
       } finally {
         setIsProcessing(false);
       }
@@ -126,6 +138,11 @@ export default function App() {
 
   const uniqueColors = useMemo(() => Array.from(new Set(data.map(d => d.classificacao).filter(Boolean))).sort(), [data]);
   
+  const uniqueMedicos = useMemo(() => {
+    const list = Array.from(new Set(data.map(d => d.medico || 'Não informado').filter(Boolean))).sort();
+    return list;
+  }, [data]);
+
   const filteredData = useMemo(() => {
     let sDate: Date | null = null;
     let eDate: Date | null = null;
@@ -145,6 +162,12 @@ export default function App() {
 
       // Color Filter
       if (selectedColors.size > 0 && !selectedColors.has(d.classificacao)) return false;
+
+      // Doctor Filter
+      if (selectedMedicos.size > 0) {
+        const med = d.medico || 'Não informado';
+        if (!selectedMedicos.has(med)) return false;
+      }
       
       // Duration Filter
       if (minTimeNum !== null || maxTimeNum !== null) {
@@ -158,22 +181,24 @@ export default function App() {
         if (maxTimeNum !== null && diffMinutes > maxTimeNum) return false;
       }
 
-      // Text Search Filter (only relevant if term exists)
+      // Text Search Filter (applies to Doctor, Color, and Dates)
       if (searchLower) {
-        const matchStr = `${d.classificacao} ${d.rawAdmissao} ${d.rawHoraClassificacao} ${d.rawAtendimento} ${d.rawFimAtendimento}`.toLowerCase();
+        const matchStr = `${d.classificacao} ${d.medico || ''} ${d.rawAdmissao} ${d.rawHoraClassificacao} ${d.rawAtendimento} ${d.rawFimAtendimento}`.toLowerCase();
         if (!matchStr.includes(searchLower)) return false;
       }
       
       return true;
     });
-  }, [data, selectedColors, startDate, endDate, startCol, endCol, searchTerm, minWaitTime, maxWaitTime]);
+  }, [data, selectedColors, selectedMedicos, startDate, endDate, startCol, endCol, searchTerm, minWaitTime, maxWaitTime]);
 
   const hasData = data.length > 0;
   
+  // Dashboard Aggregations
   const waitTimeData = hasData ? getAverageWaitTimeByClassificacao(filteredData, startCol, endCol) : [];
   const appointmentsData = hasData ? getAppointmentsByClassificacao(filteredData) : [];
-  const volumeTimelineData = hasData ? getTimelineVolumeByClassificacao(filteredData, startCol) : [];
   const dailyVolumeData = hasData ? getDailyVolumeSummary(filteredData, startCol) : [];
+  const doctorRankingData = hasData ? getDoctorRankingSummary(filteredData, startCol, endCol) : [];
+  const doctorAppointmentsData = hasData ? getAppointmentsByMedico(filteredData) : [];
 
   const toggleFilter = (setter: React.Dispatch<React.SetStateAction<Set<string>>>, value: string) => {
     setter(prev => {
@@ -183,6 +208,18 @@ export default function App() {
       return next;
     });
   };
+
+  const clearAllFilters = () => {
+    setSelectedColors(new Set());
+    setSelectedMedicos(new Set());
+    setStartDate('');
+    setEndDate('');
+    setMinWaitTime('');
+    setMaxWaitTime('');
+    setSearchTerm('');
+  };
+
+  const hasActiveFilters = selectedColors.size > 0 || selectedMedicos.size > 0 || startDate !== '' || endDate !== '' || minWaitTime !== '' || maxWaitTime !== '' || searchTerm !== '';
 
   const getColorHex = (name: string, index: number) => {
     return colorMap[name] || DEFAULT_COLORS[index % DEFAULT_COLORS.length];
@@ -197,6 +234,7 @@ export default function App() {
       rawAtendimento: record.atendimento ? format(record.atendimento, 'dd/MM/yyyy HH:mm:ss') : record.rawAtendimento,
       rawFimAtendimento: record.fimAtendimento ? format(record.fimAtendimento, 'dd/MM/yyyy HH:mm:ss') : record.rawFimAtendimento,
       classificacao: record.classificacao,
+      medico: record.medico || 'Não informado',
     });
   };
 
@@ -212,6 +250,7 @@ export default function App() {
       atendimento,
       fimAtendimento,
       classificacao: editForm.classificacao || 'Sem Classificação',
+      medico: editForm.medico?.trim() || 'Não informado',
       rawAdmissao: String(editForm.rawAdmissao || ''),
       rawHoraClassificacao: String(editForm.rawHoraClassificacao || ''),
       rawAtendimento: String(editForm.rawAtendimento || ''),
@@ -262,7 +301,6 @@ export default function App() {
       return;
     }
 
-    // Determine which IDs to delete
     const idsToDelete = data.filter(d => {
       const recordDate = d[startCol as keyof ProcessedRecord] as Date | null;
       if (!recordDate) return false; 
@@ -311,6 +349,7 @@ export default function App() {
       'Atendimento': d.atendimento ? format(d.atendimento, 'dd/MM/yyyy HH:mm:ss') : d.rawAtendimento,
       'Fim Atendimento': d.fimAtendimento ? format(d.fimAtendimento, 'dd/MM/yyyy HH:mm:ss') : d.rawFimAtendimento,
       'Classificação': d.classificacao,
+      'Médico / Profissional': d.medico || 'Não informado',
     }));
 
     const ws = XLSX.utils.json_to_sheet(exportData);
@@ -323,7 +362,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center">
         <Loader2 className="w-8 h-8 text-teal-600 animate-spin mb-4" />
-        <p className="text-slate-500 font-medium">Carregando dados do servidor...</p>
+        <p className="text-slate-500 font-medium">Carregando dados do banco de dados persistente...</p>
       </div>
     );
   }
@@ -337,7 +376,7 @@ export default function App() {
           <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6 animate-in zoom-in-95 duration-200">
             <h3 className="text-lg font-bold text-slate-800 mb-2">Excluir em Lote</h3>
             <p className="text-sm text-slate-500 mb-4">
-              Selecione o período (baseado na coluna "{columnOptions.find(c => c.id === startCol)?.label}") para excluir os registros permanentemente.
+              Selecione o período (baseado na coluna "{columnOptions.find(c => c.id === startCol)?.label}") para excluir os registros permanentemente do banco de dados.
             </p>
             <div className="grid grid-cols-2 gap-4 mb-6">
               <div>
@@ -361,36 +400,49 @@ export default function App() {
             </div>
             <div className="flex justify-end gap-3">
               <button 
-                onClick={() => setIsDeleteModalOpen(false)} 
-                className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                onClick={() => setIsDeleteModalOpen(false)}
+                className="px-4 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg text-sm font-medium transition-colors"
               >
                 Cancelar
               </button>
               <button 
-                onClick={handleBulkDelete} 
-                className="px-4 py-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition-colors flex items-center gap-2 shadow-sm"
+                onClick={handleBulkDelete}
+                className="px-4 py-2 bg-rose-600 text-white hover:bg-rose-700 rounded-lg text-sm font-medium transition-colors"
               >
-                <Trash2 className="w-4 h-4" /> Excluir
+                Confirmar Exclusão
               </button>
             </div>
           </div>
         </div>
       )}
 
-      <div className="max-w-[1400px] mx-auto space-y-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         
         {/* Header */}
-        <header className="flex flex-col md:flex-row md:items-start justify-between gap-4 bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
           <div>
-            <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Painel de Classificação de Risco</h1>
-            <p className="text-slate-500 text-sm mt-1 max-w-xl">Carregue suas planilhas XLSX. Os dados serão acumulados no banco de dados.</p>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Indicadores do Hospital</h1>
+              <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-teal-100 text-teal-800 border border-teal-200">
+                SQLite Persistente
+              </span>
+            </div>
+            <p className="text-sm text-slate-500 mt-1">
+              Análise de tempo de espera, produtividade por médico e exportação de dados
+            </p>
           </div>
-          
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="flex items-center justify-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg cursor-pointer transition-colors text-sm font-medium shadow-sm">
-              {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
-              <span>{isProcessing ? 'Processando...' : 'Adicionar XLSX'}</span>
-              <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" />
+
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 px-4 py-2.5 bg-teal-600 text-white hover:bg-teal-700 rounded-xl cursor-pointer font-medium text-sm transition-all shadow-sm shadow-teal-700/20 active:scale-95">
+              <UploadCloud className="w-4 h-4" />
+              <span>{hasData ? "Adicionar XLSX" : "Carregar Planilha XLSX"}</span>
+              <input 
+                type="file" 
+                accept=".xlsx, .xls" 
+                onChange={handleFileUpload} 
+                className="hidden" 
+                disabled={isProcessing}
+              />
             </label>
           </div>
         </header>
@@ -398,111 +450,117 @@ export default function App() {
         {hasData && (
           <div className="space-y-6">
             {/* Global Filters & Configuration */}
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-              {/* Configuração de Tempos */}
-              <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+              
+              {/* Card 1: Configuração de Tempos */}
+              <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm space-y-3">
                 <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                   <Settings className="w-4 h-4 text-slate-400" /> Configuração de Tempos
                 </h3>
-                
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Início do Intervalo</label>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Início do Intervalo</label>
                   <select 
                     value={startCol}
                     onChange={e => setStartCol(e.target.value)}
-                    className="w-full border border-slate-300 rounded-md p-2 text-sm text-slate-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                    className="w-full border border-slate-300 rounded-md p-1.5 text-xs text-slate-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                   >
                     {columnOptions.map(opt => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Fim do Intervalo</label>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Fim do Intervalo</label>
                   <select 
                     value={endCol}
                     onChange={e => setEndCol(e.target.value)}
-                    className="w-full border border-slate-300 rounded-md p-2 text-sm text-slate-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                    className="w-full border border-slate-300 rounded-md p-1.5 text-xs text-slate-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                   >
                     {columnOptions.map(opt => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
                   </select>
                 </div>
               </div>
 
-              {/* Date Range */}
-              <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm">
-                <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+              {/* Card 2: Date Range */}
+              <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm space-y-3">
+                <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-slate-400" /> Período
                 </h3>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-500 mb-1">Data Inicial</label>
-                    <input 
-                      type="date" 
-                      value={startDate} 
-                      onChange={(e) => setStartDate(e.target.value)}
-                      className="w-full border border-slate-300 rounded-md p-2 text-sm text-slate-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-500 mb-1">Data Final</label>
-                    <input 
-                      type="date" 
-                      value={endDate} 
-                      onChange={(e) => setEndDate(e.target.value)}
-                      className="w-full border border-slate-300 rounded-md p-2 text-sm text-slate-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
-                    />
-                  </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Data Inicial</label>
+                  <input 
+                    type="date" 
+                    value={startDate} 
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="w-full border border-slate-300 rounded-md p-1.5 text-xs text-slate-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Data Final</label>
+                  <input 
+                    type="date" 
+                    value={endDate} 
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="w-full border border-slate-300 rounded-md p-1.5 text-xs text-slate-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                  />
                 </div>
               </div>
 
-              {/* Duration Filter */}
-              <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm">
-                <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+              {/* Card 3: Duration Filter */}
+              <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm space-y-3">
+                <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                   <Clock className="w-4 h-4 text-slate-400" /> Duração (minutos)
                 </h3>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-500 mb-1">Tempo Mínimo (Ex: 240)</label>
-                    <input 
-                      type="number" 
-                      min="0"
-                      value={minWaitTime} 
-                      onChange={(e) => setMinWaitTime(e.target.value)}
-                      placeholder="Mínimo"
-                      className="w-full border border-slate-300 rounded-md p-2 text-sm text-slate-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-500 mb-1">Tempo Máximo</label>
-                    <input 
-                      type="number" 
-                      min="0"
-                      value={maxWaitTime} 
-                      onChange={(e) => setMaxWaitTime(e.target.value)}
-                      placeholder="Máximo"
-                      className="w-full border border-slate-300 rounded-md p-2 text-sm text-slate-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
-                    />
-                  </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Tempo Mínimo (Ex: 240)</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    value={minWaitTime} 
+                    onChange={(e) => setMinWaitTime(e.target.value)}
+                    placeholder="Mínimo em min"
+                    className="w-full border border-slate-300 rounded-md p-1.5 text-xs text-slate-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Tempo Máximo</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    value={maxWaitTime} 
+                    onChange={(e) => setMaxWaitTime(e.target.value)}
+                    placeholder="Máximo em min"
+                    className="w-full border border-slate-300 rounded-md p-1.5 text-xs text-slate-700 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                  />
                 </div>
               </div>
 
-              {/* Colors Filter */}
-              <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm">
-                <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                  <Filter className="w-4 h-4 text-slate-400" /> Filtrar por Cor
-                </h3>
-                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+              {/* Card 4: Colors Filter */}
+              <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm space-y-2 flex flex-col">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                    <Filter className="w-4 h-4 text-slate-400" /> Cores
+                  </h3>
+                  {selectedColors.size > 0 && (
+                    <button 
+                      onClick={() => setSelectedColors(new Set())}
+                      className="text-[11px] text-teal-600 hover:underline"
+                    >
+                      Limpar
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto flex-1 content-start">
                   {uniqueColors.map(color => (
                     <button
                       key={color}
                       onClick={() => toggleFilter(setSelectedColors, color)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                      className={`px-2 py-1 text-xs font-medium rounded-full border transition-colors ${
                         selectedColors.has(color) 
                           ? 'bg-teal-50 border-teal-500 text-teal-700 shadow-sm' 
                           : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
                       }`}
                     >
                       <span 
-                        className="inline-block w-2 h-2 rounded-full mr-2" 
+                        className="inline-block w-2 h-2 rounded-full mr-1.5" 
                         style={{backgroundColor: getColorHex(color, 0)}} 
                       />
                       {color}
@@ -510,7 +568,96 @@ export default function App() {
                   ))}
                 </div>
               </div>
+
+              {/* Card 5: Doctor Filter */}
+              <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm space-y-2 flex flex-col">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                    <Stethoscope className="w-4 h-4 text-teal-600" /> Médico / Profissional
+                  </h3>
+                  {selectedMedicos.size > 0 && (
+                    <button 
+                      onClick={() => setSelectedMedicos(new Set())}
+                      className="text-[11px] text-teal-600 hover:underline"
+                    >
+                      Limpar
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <input 
+                    type="text"
+                    value={medicoSearchTerm}
+                    onChange={e => setMedicoSearchTerm(e.target.value)}
+                    placeholder="Buscar médico..."
+                    className="w-full text-xs p-1 border border-slate-200 rounded text-slate-700 outline-none focus:border-teal-500"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto flex-1 content-start">
+                  {uniqueMedicos
+                    .filter(med => med.toLowerCase().includes(medicoSearchTerm.toLowerCase()))
+                    .map(medico => (
+                      <button
+                        key={medico}
+                        onClick={() => toggleFilter(setSelectedMedicos, medico)}
+                        className={`px-2 py-1 text-xs font-medium rounded-full border transition-colors truncate max-w-[150px] ${
+                          selectedMedicos.has(medico) 
+                            ? 'bg-teal-50 border-teal-500 text-teal-700 shadow-sm font-semibold' 
+                            : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                        }`}
+                        title={medico}
+                      >
+                        {medico}
+                      </button>
+                  ))}
+                  {uniqueMedicos.length === 0 && (
+                    <span className="text-xs text-slate-400 italic">Nenhum médico cadastrado</span>
+                  )}
+                </div>
+              </div>
+
             </div>
+
+            {/* Active Filters Clear Bar */}
+            {hasActiveFilters && (
+              <div className="flex items-center justify-between bg-teal-50/70 border border-teal-200 px-4 py-2 rounded-xl text-xs text-teal-800">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold">Filtros Ativos:</span>
+                  {selectedColors.size > 0 && (
+                    <span className="bg-white px-2 py-0.5 rounded border border-teal-200 font-medium">
+                      {selectedColors.size} cor(es)
+                    </span>
+                  )}
+                  {selectedMedicos.size > 0 && (
+                    <span className="bg-white px-2 py-0.5 rounded border border-teal-200 font-medium">
+                      {selectedMedicos.size} médico(s)
+                    </span>
+                  )}
+                  {(startDate || endDate) && (
+                    <span className="bg-white px-2 py-0.5 rounded border border-teal-200 font-medium">
+                      Período: {startDate || 'Início'} até {endDate || 'Fim'}
+                    </span>
+                  )}
+                  {(minWaitTime || maxWaitTime) && (
+                    <span className="bg-white px-2 py-0.5 rounded border border-teal-200 font-medium">
+                      Duração: {minWaitTime ? `≥ ${minWaitTime} min` : ''} {maxWaitTime ? `≤ ${maxWaitTime} min` : ''}
+                    </span>
+                  )}
+                  {searchTerm && (
+                    <span className="bg-white px-2 py-0.5 rounded border border-teal-200 font-medium">
+                      Busca: "{searchTerm}"
+                    </span>
+                  )}
+                </div>
+                <button 
+                  onClick={clearAllFilters}
+                  className="flex items-center gap-1 font-semibold text-teal-700 hover:text-teal-900 ml-4 hover:underline"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Limpar Todos os Filtros</span>
+                </button>
+              </div>
+            )}
 
             <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
               
@@ -536,166 +683,435 @@ export default function App() {
 
               <div className="p-6">
                 {activeTab === 'dashboard' ? (
-                  <div className="space-y-6 animate-in fade-in duration-300">
-                    {/* Dashboard Grid */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <div className="space-y-8 animate-in fade-in duration-300">
                     
-                    {/* Chart: Appointments by Color */}
-                    <div id="chart-appointments" className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm">
-                      <h3 className="text-base font-semibold text-slate-800 mb-4">Total de Atendimentos por Cor</h3>
-                      <div className="h-[300px]">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={appointmentsData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                            <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                            <YAxis tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                            <RechartsTooltip 
-                              contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                              cursor={{fill: '#f8fafc'}}
-                            />
-                            <Bar dataKey="atendimentos" radius={[4, 4, 0, 0]}>
-                              {appointmentsData.map((entry, index) => (
-                                <Cell key={`cell-${index}`} fill={getColorHex(entry.name, index)} />
-                              ))}
-                            </Bar>
-                          </BarChart>
-                        </ResponsiveContainer>
+                    {/* SECTION 1: Classificação por Cor (Charts) */}
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                        <span>Classificação e Triagem</span>
+                      </h2>
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        
+                        {/* Chart: Appointments by Color */}
+                        <div id="chart-appointments" className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm">
+                          <h3 className="text-base font-semibold text-slate-800 mb-4">Total de Atendimentos por Cor</h3>
+                          <div className="h-[280px]">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={appointmentsData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                                <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                                <YAxis tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                                <RechartsTooltip 
+                                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                  cursor={{fill: '#f8fafc'}}
+                                />
+                                <Bar dataKey="atendimentos" radius={[4, 4, 0, 0]}>
+                                  {appointmentsData.map((entry, index) => (
+                                    <Cell key={`cell-${index}`} fill={getColorHex(entry.name, index)} />
+                                  ))}
+                                </Bar>
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+
+                        {/* Chart: Wait Time by Color */}
+                        <div id="chart-wait-time" className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm">
+                          <h3 className="text-base font-semibold text-slate-800 mb-4">
+                            Tempo Médio (minutos) por Cor ({columnOptions.find(c => c.id === startCol)?.label} → {columnOptions.find(c => c.id === endCol)?.label})
+                          </h3>
+                          <div className="h-[280px]">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={waitTimeData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                                <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                                <YAxis tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                                <RechartsTooltip 
+                                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                  cursor={{fill: '#f8fafc'}}
+                                  formatter={(value: number) => [`${value} min`, 'Média']}
+                                />
+                                <Bar dataKey="mediaEspera" radius={[4, 4, 0, 0]}>
+                                  {waitTimeData.map((entry, index) => (
+                                    <Cell key={`cell-${index}`} fill={getColorHex(entry.name, index)} />
+                                  ))}
+                                </Bar>
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+
                       </div>
                     </div>
 
-                    {/* Chart: Wait Time by Color */}
-                    <div id="chart-wait-time" className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm">
-                      <h3 className="text-base font-semibold text-slate-800 mb-4">Tempo Médio (minutos) por Cor</h3>
-                      <div className="h-[300px]">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={waitTimeData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                            <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                            <YAxis tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                            <RechartsTooltip 
-                              contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                              cursor={{fill: '#f8fafc'}}
-                              formatter={(value: number) => [`${value} min`, 'Média']}
-                            />
-                            <Bar dataKey="mediaEspera" radius={[4, 4, 0, 0]}>
-                              {waitTimeData.map((entry, index) => (
-                                <Cell key={`cell-${index}`} fill={getColorHex(entry.name, index)} />
-                              ))}
-                            </Bar>
-                          </BarChart>
-                        </ResponsiveContainer>
+                    {/* SECTION 2: Médicos / Profissionais (Ranking & Volume) */}
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                          <Stethoscope className="w-5 h-5 text-teal-600" />
+                          <span>Desempenho e Produtividade por Médico / Profissional</span>
+                        </h2>
+                        <span className="text-xs text-slate-500 font-medium">
+                          Obedecendo intervalo: {columnOptions.find(c => c.id === startCol)?.label} → {columnOptions.find(c => c.id === endCol)?.label}
+                        </span>
                       </div>
-                    </div>
 
-                    {/* Chart: Volume Timeline */}
-                    <div id="chart-timeline" className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm lg:col-span-2">
-                      <h3 className="text-base font-semibold text-slate-800 mb-4">Volume de Atendimentos (Picos por Dia)</h3>
-                      <div className="h-[350px]">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={volumeTimelineData} margin={{ top: 10, right: 20, left: 0, bottom: 20 }}>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                            <XAxis 
-                              dataKey="name" 
-                              tick={{ fontSize: 12, fill: '#64748b' }} 
-                              axisLine={false} 
-                              tickLine={false} 
-                            />
-                            <YAxis tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                            <RechartsTooltip 
-                              contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                            />
-                            <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '20px' }} />
-                            
-                            {(selectedColors.size > 0 ? Array.from(selectedColors) : uniqueColors).map((color, idx) => (
-                              <Line 
-                                key={color}
-                                type="monotone" 
-                                dataKey={color} 
-                                name={color}
-                                stroke={getColorHex(color, idx)} 
-                                strokeWidth={2}
-                                dot={{ r: 4, strokeWidth: 0, fill: getColorHex(color, idx) }}
-                                activeDot={{ r: 6 }}
-                              />
-                            ))}
-                          </LineChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Summary Tables Grid */}
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mt-6">
-                    {/* Summary Table: By Color */}
-                    <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
-                      <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-                        <h3 className="text-sm font-semibold text-slate-800">Resumo de Atendimentos por Cor</h3>
-                      </div>
-                      <div className="overflow-x-auto flex-1">
-                        <table className="w-full text-sm text-left h-full">
-                          <thead className="bg-slate-50 text-slate-500 font-medium">
-                            <tr>
-                              <th className="px-5 py-3 border-b border-slate-200">Classificação</th>
-                              <th className="px-5 py-3 border-b border-slate-200 text-right">Qtd. Atendimentos</th>
-                              <th className="px-5 py-3 border-b border-slate-200 text-right">Tempo Médio ({columnOptions.find(c => c.id === startCol)?.label} → {columnOptions.find(c => c.id === endCol)?.label})</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {appointmentsData.map((item, index) => {
-                              const waitTimeItem = waitTimeData.find(w => w.name === item.name);
-                              return (
-                                <tr key={index} className="hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0">
-                                  <td className="px-5 py-3 font-medium text-slate-700 flex items-center gap-2">
-                                    <span 
-                                      className="inline-block w-3 h-3 rounded-full" 
-                                      style={{backgroundColor: getColorHex(item.name, index)}} 
-                                    />
-                                    {item.name}
-                                  </td>
-                                  <td className="px-5 py-3 text-right tabular-nums">{item.atendimentos}</td>
-                                  <td className="px-5 py-3 text-right tabular-nums">
-                                    {waitTimeItem ? `${waitTimeItem.mediaEspera} min` : '-'}
-                                  </td>
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        
+                        {/* Table: Ranking Resumo de Atendimentos por Médico */}
+                        <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
+                          <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+                            <h3 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                              <UserCheck className="w-4 h-4 text-teal-600" />
+                              Ranking de Atendimentos por Médico
+                            </h3>
+                            <span className="text-xs text-slate-500 font-medium">
+                              Total de Médicos: {doctorRankingData.length}
+                            </span>
+                          </div>
+                          <div className="overflow-x-auto overflow-y-auto max-h-[350px] flex-1">
+                            <table className="w-full text-sm text-left">
+                              <thead className="bg-slate-50 text-slate-500 font-medium sticky top-0 z-10 shadow-sm">
+                                <tr>
+                                  <th className="px-5 py-3 border-b border-slate-200 bg-slate-50">Posição / Médico</th>
+                                  <th className="px-5 py-3 border-b border-slate-200 bg-slate-50 text-right">Qtd. Atendimentos</th>
+                                  <th className="px-5 py-3 border-b border-slate-200 bg-slate-50 text-right">Tempo Médio</th>
                                 </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                              </thead>
+                              <tbody>
+                                {doctorRankingData.map((item, index) => (
+                                  <tr key={index} className="hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0">
+                                    <td className="px-5 py-3 font-medium text-slate-700 flex items-center gap-2.5">
+                                      <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-bold ${
+                                        index === 0 ? 'bg-amber-100 text-amber-800 border border-amber-300' :
+                                        index === 1 ? 'bg-slate-200 text-slate-700 border border-slate-300' :
+                                        index === 2 ? 'bg-orange-100 text-orange-800 border border-orange-300' :
+                                        'bg-slate-100 text-slate-500'
+                                      }`}>
+                                        {index + 1}
+                                      </span>
+                                      <span className="truncate max-w-[200px]" title={item.name}>{item.name}</span>
+                                    </td>
+                                    <td className="px-5 py-3 text-right tabular-nums font-semibold text-slate-800">{item.atendimentos}</td>
+                                    <td className="px-5 py-3 text-right tabular-nums text-teal-700 font-medium">
+                                      {item.mediaEspera !== null ? `${item.mediaEspera} min` : '-'}
+                                    </td>
+                                  </tr>
+                                ))}
+                                {doctorRankingData.length === 0 && (
+                                  <tr>
+                                    <td colSpan={3} className="px-5 py-8 text-center text-slate-500">
+                                      Nenhum dado encontrado para médicos com os filtros atuais.
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Chart: Quantidade de Atendimentos por Médico */}
+                        <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm flex flex-col">
+                          <h3 className="text-base font-semibold text-slate-800 mb-4">Quantidade de Atendimentos por Médico</h3>
+                          <div className="h-[300px] flex-1">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={doctorAppointmentsData.slice(0, 10)} margin={{ top: 10, right: 10, left: 0, bottom: 40 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                                <XAxis 
+                                  dataKey="name" 
+                                  tick={{ fontSize: 11, fill: '#64748b' }} 
+                                  interval={0}
+                                  angle={-25}
+                                  textAnchor="end"
+                                  axisLine={false} 
+                                  tickLine={false} 
+                                />
+                                <YAxis tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                                <RechartsTooltip 
+                                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                  cursor={{fill: '#f8fafc'}}
+                                />
+                                <Bar dataKey="atendimentos" fill="#0f766e" radius={[4, 4, 0, 0]} name="Atendimentos" />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+
                       </div>
                     </div>
 
-                    {/* Summary Table: General Daily Volume */}
-                    <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
-                      <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-                        <h3 className="text-sm font-semibold text-slate-800">Volume Diário Geral</h3>
+                    {/* SECTION 3: Resumo por Cor & Volume Diário Geral */}
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-800 mb-4">Volume Diário e Resumo Geral</h2>
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        
+                        {/* Summary Table: By Color */}
+                        <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
+                          <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+                            <h3 className="text-sm font-semibold text-slate-800">Resumo de Atendimentos por Cor</h3>
+                          </div>
+                          <div className="overflow-x-auto overflow-y-auto max-h-[350px] flex-1">
+                            <table className="w-full text-sm text-left">
+                              <thead className="bg-slate-50 text-slate-500 font-medium sticky top-0 z-10 shadow-sm">
+                                <tr>
+                                  <th className="px-5 py-3 border-b border-slate-200 bg-slate-50">Classificação</th>
+                                  <th className="px-5 py-3 border-b border-slate-200 bg-slate-50 text-right">Qtd. Atendimentos</th>
+                                  <th className="px-5 py-3 border-b border-slate-200 bg-slate-50 text-right">Tempo Médio ({columnOptions.find(c => c.id === startCol)?.label} → {columnOptions.find(c => c.id === endCol)?.label})</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {appointmentsData.map((item, index) => {
+                                  const waitTimeItem = waitTimeData.find(w => w.name === item.name);
+                                  return (
+                                    <tr key={index} className="hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0">
+                                      <td className="px-5 py-3 font-medium text-slate-700 flex items-center gap-2">
+                                        <span 
+                                          className="inline-block w-3 h-3 rounded-full" 
+                                          style={{backgroundColor: getColorHex(item.name, index)}} 
+                                        />
+                                        {item.name}
+                                      </td>
+                                      <td className="px-5 py-3 text-right tabular-nums">{item.atendimentos}</td>
+                                      <td className="px-5 py-3 text-right tabular-nums">
+                                        {waitTimeItem ? `${waitTimeItem.mediaEspera} min` : '-'}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Summary Table: General Daily Volume */}
+                        <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
+                          <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+                            <h3 className="text-sm font-semibold text-slate-800">Volume Diário Geral</h3>
+                          </div>
+                          <div className="overflow-x-auto overflow-y-auto max-h-[350px] flex-1">
+                            <table className="w-full text-sm text-left">
+                              <thead className="bg-slate-50 text-slate-500 font-medium sticky top-0 z-10 shadow-sm">
+                                <tr>
+                                  <th className="px-5 py-3 border-b border-slate-200 bg-slate-50">Data</th>
+                                  <th className="px-5 py-3 border-b border-slate-200 bg-slate-50 text-right">Total de Atendimentos</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {dailyVolumeData.map((item, index) => (
+                                  <tr key={index} className="hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0">
+                                    <td className="px-5 py-3 font-medium text-slate-700">{item.date}</td>
+                                    <td className="px-5 py-3 text-right tabular-nums">{item.total}</td>
+                                  </tr>
+                                ))}
+                                {dailyVolumeData.length > 0 && (
+                                  <tr className="bg-slate-50/80 font-semibold text-slate-800 border-t-2 border-slate-200 sticky bottom-0 shadow-sm">
+                                    <td className="px-5 py-3">Total Geral</td>
+                                    <td className="px-5 py-3 text-right tabular-nums">
+                                      {dailyVolumeData.reduce((acc, curr) => acc + curr.total, 0)}
+                                    </td>
+                                  </tr>
+                                )}
+                                {dailyVolumeData.length === 0 && (
+                                  <tr>
+                                    <td colSpan={2} className="px-5 py-8 text-center text-slate-500">
+                                      Nenhum dado encontrado para o período.
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
                       </div>
-                      <div className="overflow-x-auto overflow-y-auto max-h-[400px] flex-1">
-                        <table className="w-full text-sm text-left">
-                          <thead className="bg-slate-50 text-slate-500 font-medium sticky top-0 z-10 shadow-sm">
+
+                      {/* Chart: Volume de Atendimentos por Dia (Bar Chart posicionado abaixo da tabela de volume diário geral) */}
+                      <div id="chart-daily-volume" className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm mt-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="text-base font-semibold text-slate-800">
+                            Volume de Atendimentos (Picos por Dia)
+                          </h3>
+                          <span className="text-xs text-slate-500 font-medium">
+                            Gráfico de barras geral sem distinção de cor
+                          </span>
+                        </div>
+                        <div className="h-[320px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={dailyVolumeData} margin={{ top: 10, right: 20, left: 0, bottom: 20 }}>
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                              <XAxis 
+                                dataKey="date" 
+                                tick={{ fontSize: 12, fill: '#64748b' }} 
+                                axisLine={false} 
+                                tickLine={false} 
+                              />
+                              <YAxis tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                              <RechartsTooltip 
+                                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                cursor={{fill: '#f8fafc'}}
+                              />
+                              <Bar dataKey="total" name="Total Atendimentos" fill="#0d9488" radius={[4, 4, 0, 0]} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+
+                    </div>
+
+                  </div>
+                ) : (
+                  <div className="animate-in fade-in duration-300">
+                    {/* Action Bar for Raw Data */}
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                      <div className="flex items-center gap-4 w-full sm:w-auto flex-1">
+                        <div className="text-sm text-slate-600 whitespace-nowrap">
+                          Exibindo <span className="font-semibold text-slate-800">{filteredData.length}</span> registros
+                        </div>
+                        <div className="relative w-full max-w-sm">
+                          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                          <input 
+                            type="text" 
+                            placeholder="Buscar por médico, cor, data..."
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            className="w-full pl-9 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-1 focus:ring-teal-500 outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 w-full sm:w-auto">
+                        <button 
+                          onClick={() => setIsDeleteModalOpen(true)}
+                          className="flex items-center justify-center gap-2 px-4 py-2 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 rounded-lg text-sm font-medium transition-colors w-full sm:w-auto"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          <span>Excluir em Lote</span>
+                        </button>
+                        <button 
+                          onClick={handleExport}
+                          className="flex items-center justify-center gap-2 px-4 py-2 bg-teal-50 border border-teal-200 text-teal-700 hover:bg-teal-100 rounded-lg text-sm font-medium transition-colors w-full sm:w-auto"
+                        >
+                          <Download className="w-4 h-4" />
+                          <span>Exportar XLSX</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Raw Data Table with Edit/Delete */}
+                    <div className="border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                      <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                        <table className="w-full text-sm text-left whitespace-nowrap relative">
+                          <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 shadow-sm">
                             <tr>
-                              <th className="px-5 py-3 border-b border-slate-200 bg-slate-50">Data</th>
-                              <th className="px-5 py-3 border-b border-slate-200 bg-slate-50 text-right">Total de Atendimentos</th>
+                              <th className="px-4 py-3 border-b border-slate-200">Admissão</th>
+                              <th className="px-4 py-3 border-b border-slate-200">Classificação</th>
+                              <th className="px-4 py-3 border-b border-slate-200">Atendimento</th>
+                              <th className="px-4 py-3 border-b border-slate-200">Fim Atendimento</th>
+                              <th className="px-4 py-3 border-b border-slate-200">Cor</th>
+                              <th className="px-4 py-3 border-b border-slate-200">Médico / Profissional</th>
+                              <th className="px-4 py-3 border-b border-slate-200 text-right">Ações</th>
                             </tr>
                           </thead>
-                          <tbody>
-                            {dailyVolumeData.map((item, index) => (
-                              <tr key={index} className="hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0">
-                                <td className="px-5 py-3 font-medium text-slate-700">{item.date}</td>
-                                <td className="px-5 py-3 text-right tabular-nums">{item.total}</td>
+                          <tbody className="divide-y divide-slate-100">
+                            {filteredData.map((row) => (
+                              <tr key={row.id} className="hover:bg-slate-50/80 transition-colors">
+                                {editingId === row.id ? (
+                                  <>
+                                    <td className="px-4 py-2">
+                                      <input 
+                                        type="text" 
+                                        value={editForm.rawAdmissao || ''} 
+                                        onChange={e => setEditForm({...editForm, rawAdmissao: e.target.value})}
+                                        className="w-full text-xs p-1.5 border border-teal-300 rounded focus:ring-1 focus:ring-teal-500 outline-none"
+                                      />
+                                    </td>
+                                    <td className="px-4 py-2">
+                                      <input 
+                                        type="text" 
+                                        value={editForm.rawHoraClassificacao || ''} 
+                                        onChange={e => setEditForm({...editForm, rawHoraClassificacao: e.target.value})}
+                                        className="w-full text-xs p-1.5 border border-teal-300 rounded focus:ring-1 focus:ring-teal-500 outline-none"
+                                      />
+                                    </td>
+                                    <td className="px-4 py-2">
+                                      <input 
+                                        type="text" 
+                                        value={editForm.rawAtendimento || ''} 
+                                        onChange={e => setEditForm({...editForm, rawAtendimento: e.target.value})}
+                                        className="w-full text-xs p-1.5 border border-teal-300 rounded focus:ring-1 focus:ring-teal-500 outline-none"
+                                      />
+                                    </td>
+                                    <td className="px-4 py-2">
+                                      <input 
+                                        type="text" 
+                                        value={editForm.rawFimAtendimento || ''} 
+                                        onChange={e => setEditForm({...editForm, rawFimAtendimento: e.target.value})}
+                                        className="w-full text-xs p-1.5 border border-teal-300 rounded focus:ring-1 focus:ring-teal-500 outline-none"
+                                      />
+                                    </td>
+                                    <td className="px-4 py-2">
+                                      <input 
+                                        type="text" 
+                                        value={editForm.classificacao || ''} 
+                                        onChange={e => setEditForm({...editForm, classificacao: e.target.value})}
+                                        className="w-28 text-xs p-1.5 border border-teal-300 rounded focus:ring-1 focus:ring-teal-500 outline-none"
+                                      />
+                                    </td>
+                                    <td className="px-4 py-2">
+                                      <input 
+                                        type="text" 
+                                        value={editForm.medico || ''} 
+                                        onChange={e => setEditForm({...editForm, medico: e.target.value})}
+                                        placeholder="Nome do Médico"
+                                        className="w-36 text-xs p-1.5 border border-teal-300 rounded focus:ring-1 focus:ring-teal-500 outline-none"
+                                      />
+                                    </td>
+                                    <td className="px-4 py-2 text-right">
+                                      <div className="flex justify-end gap-1">
+                                        <button onClick={() => handleSaveEdit(row.id)} className="p-1.5 text-white bg-teal-600 hover:bg-teal-700 rounded transition-colors" title="Salvar">
+                                          <Save className="w-4 h-4"/>
+                                        </button>
+                                        <button onClick={() => setEditingId(null)} className="p-1.5 text-slate-600 bg-slate-200 hover:bg-slate-300 rounded transition-colors" title="Cancelar">
+                                          <X className="w-4 h-4"/>
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </>
+                                ) : (
+                                  <>
+                                    <td className="px-4 py-3">{row.admissao ? format(row.admissao, 'dd/MM/yyyy HH:mm:ss') : row.rawAdmissao}</td>
+                                    <td className="px-4 py-3">{row.horaClassificacao ? format(row.horaClassificacao, 'dd/MM/yyyy HH:mm:ss') : row.rawHoraClassificacao}</td>
+                                    <td className="px-4 py-3">{row.atendimento ? format(row.atendimento, 'dd/MM/yyyy HH:mm:ss') : row.rawAtendimento}</td>
+                                    <td className="px-4 py-3">{row.fimAtendimento ? format(row.fimAtendimento, 'dd/MM/yyyy HH:mm:ss') : row.rawFimAtendimento}</td>
+                                    <td className="px-4 py-3 font-medium flex items-center gap-2">
+                                      <span 
+                                        className="inline-block w-2 h-2 rounded-full" 
+                                        style={{backgroundColor: getColorHex(row.classificacao, 0)}} 
+                                      />
+                                      {row.classificacao}
+                                    </td>
+                                    <td className="px-4 py-3 text-slate-700">
+                                      <span className="inline-flex items-center gap-1.5">
+                                        <Stethoscope className="w-3.5 h-3.5 text-teal-600" />
+                                        <span className="font-medium">{row.medico || 'Não informado'}</span>
+                                      </span>
+                                    </td>
+                                    <td className="px-4 py-3 text-right">
+                                      <div className="flex justify-end gap-2 opacity-60 hover:opacity-100 transition-opacity">
+                                        <button onClick={() => handleEditClick(row)} className="p-1 text-teal-600 hover:bg-teal-50 rounded" title="Editar">
+                                          <Edit2 className="w-4 h-4" />
+                                        </button>
+                                        <button onClick={() => handleDeleteRow(row.id)} className="p-1 text-rose-600 hover:bg-rose-50 rounded" title="Excluir">
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </>
+                                )}
                               </tr>
                             ))}
-                            {dailyVolumeData.length > 0 && (
-                              <tr className="bg-slate-50/80 font-semibold text-slate-800 border-t-2 border-slate-200 sticky bottom-0 shadow-sm">
-                                <td className="px-5 py-3">Total Geral</td>
-                                <td className="px-5 py-3 text-right tabular-nums">
-                                  {dailyVolumeData.reduce((acc, curr) => acc + curr.total, 0)}
-                                </td>
-                              </tr>
-                            )}
-                            {dailyVolumeData.length === 0 && (
+                            {filteredData.length === 0 && (
                               <tr>
-                                <td colSpan={2} className="px-5 py-8 text-center text-slate-500">
-                                  Nenhum dado encontrado para o período.
+                                <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                                  Nenhum registro encontrado.
                                 </td>
                               </tr>
                             )}
@@ -704,166 +1120,31 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                </div>
-              ) : (
-                <div className="animate-in fade-in duration-300">
-                  {/* Action Bar for Raw Data */}
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-                    <div className="flex items-center gap-4 w-full sm:w-auto flex-1">
-                      <div className="text-sm text-slate-600 whitespace-nowrap">
-                        Exibindo <span className="font-semibold text-slate-800">{filteredData.length}</span> registros
-                      </div>
-                      <div className="relative w-full max-w-sm">
-                        <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                        <input 
-                          type="text" 
-                          placeholder="Buscar registros..."
-                          value={searchTerm}
-                          onChange={(e) => setSearchTerm(e.target.value)}
-                          className="w-full pl-9 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-1 focus:ring-teal-500 outline-none"
-                        />
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3 w-full sm:w-auto">
-                      <button 
-                        onClick={() => setIsDeleteModalOpen(true)}
-                        className="flex items-center justify-center gap-2 px-4 py-2 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 rounded-lg text-sm font-medium transition-colors w-full sm:w-auto"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        <span>Excluir em Lote</span>
-                      </button>
-                      <button 
-                        onClick={handleExport}
-                        className="flex items-center justify-center gap-2 px-4 py-2 bg-teal-50 border border-teal-200 text-teal-700 hover:bg-teal-100 rounded-lg text-sm font-medium transition-colors w-full sm:w-auto"
-                      >
-                        <Download className="w-4 h-4" />
-                        <span>Exportar XLSX</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Raw Data Table with Edit/Delete */}
-                  <div className="border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                    <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
-                      <table className="w-full text-sm text-left whitespace-nowrap relative">
-                        <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 shadow-sm">
-                          <tr>
-                            <th className="px-4 py-3 border-b border-slate-200">Admissão</th>
-                            <th className="px-4 py-3 border-b border-slate-200">Classificação (Hora)</th>
-                            <th className="px-4 py-3 border-b border-slate-200">Atendimento</th>
-                            <th className="px-4 py-3 border-b border-slate-200">Fim Atendimento</th>
-                            <th className="px-4 py-3 border-b border-slate-200">Cor</th>
-                            <th className="px-4 py-3 border-b border-slate-200 text-right">Ações</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {filteredData.map((row) => (
-                            <tr key={row.id} className="hover:bg-slate-50/80 transition-colors">
-                              {editingId === row.id ? (
-                                <>
-                                  <td className="px-4 py-2">
-                                    <input 
-                                      type="text" 
-                                      value={editForm.rawAdmissao || ''} 
-                                      onChange={e => setEditForm({...editForm, rawAdmissao: e.target.value})}
-                                      className="w-full text-xs p-1.5 border border-teal-300 rounded focus:ring-1 focus:ring-teal-500 outline-none"
-                                    />
-                                  </td>
-                                  <td className="px-4 py-2">
-                                    <input 
-                                      type="text" 
-                                      value={editForm.rawHoraClassificacao || ''} 
-                                      onChange={e => setEditForm({...editForm, rawHoraClassificacao: e.target.value})}
-                                      className="w-full text-xs p-1.5 border border-teal-300 rounded focus:ring-1 focus:ring-teal-500 outline-none"
-                                    />
-                                  </td>
-                                  <td className="px-4 py-2">
-                                    <input 
-                                      type="text" 
-                                      value={editForm.rawAtendimento || ''} 
-                                      onChange={e => setEditForm({...editForm, rawAtendimento: e.target.value})}
-                                      className="w-full text-xs p-1.5 border border-teal-300 rounded focus:ring-1 focus:ring-teal-500 outline-none"
-                                    />
-                                  </td>
-                                  <td className="px-4 py-2">
-                                    <input 
-                                      type="text" 
-                                      value={editForm.rawFimAtendimento || ''} 
-                                      onChange={e => setEditForm({...editForm, rawFimAtendimento: e.target.value})}
-                                      className="w-full text-xs p-1.5 border border-teal-300 rounded focus:ring-1 focus:ring-teal-500 outline-none"
-                                    />
-                                  </td>
-                                  <td className="px-4 py-2">
-                                    <input 
-                                      type="text" 
-                                      value={editForm.classificacao || ''} 
-                                      onChange={e => setEditForm({...editForm, classificacao: e.target.value})}
-                                      className="w-32 text-xs p-1.5 border border-teal-300 rounded focus:ring-1 focus:ring-teal-500 outline-none"
-                                    />
-                                  </td>
-                                  <td className="px-4 py-2 text-right">
-                                    <div className="flex justify-end gap-1">
-                                      <button onClick={() => handleSaveEdit(row.id)} className="p-1.5 text-white bg-teal-600 hover:bg-teal-700 rounded transition-colors" title="Salvar">
-                                        <Save className="w-4 h-4"/>
-                                      </button>
-                                      <button onClick={() => setEditingId(null)} className="p-1.5 text-slate-600 bg-slate-200 hover:bg-slate-300 rounded transition-colors" title="Cancelar">
-                                        <X className="w-4 h-4"/>
-                                      </button>
-                                    </div>
-                                  </td>
-                                </>
-                              ) : (
-                                <>
-                                  <td className="px-4 py-3">{row.admissao ? format(row.admissao, 'dd/MM/yyyy HH:mm:ss') : row.rawAdmissao}</td>
-                                  <td className="px-4 py-3">{row.horaClassificacao ? format(row.horaClassificacao, 'dd/MM/yyyy HH:mm:ss') : row.rawHoraClassificacao}</td>
-                                  <td className="px-4 py-3">{row.atendimento ? format(row.atendimento, 'dd/MM/yyyy HH:mm:ss') : row.rawAtendimento}</td>
-                                  <td className="px-4 py-3">{row.fimAtendimento ? format(row.fimAtendimento, 'dd/MM/yyyy HH:mm:ss') : row.rawFimAtendimento}</td>
-                                  <td className="px-4 py-3 font-medium flex items-center gap-2">
-                                    <span 
-                                      className="inline-block w-2 h-2 rounded-full" 
-                                      style={{backgroundColor: getColorHex(row.classificacao, 0)}} 
-                                    />
-                                    {row.classificacao}
-                                  </td>
-                                  <td className="px-4 py-3 text-right">
-                                    <div className="flex justify-end gap-2 opacity-60 hover:opacity-100 transition-opacity">
-                                      <button onClick={() => handleEditClick(row)} className="p-1 text-teal-600 hover:bg-teal-50 rounded" title="Editar">
-                                        <Edit2 className="w-4 h-4" />
-                                      </button>
-                                      <button onClick={() => handleDeleteRow(row.id)} className="p-1 text-rose-600 hover:bg-rose-50 rounded" title="Excluir">
-                                        <Trash2 className="w-4 h-4" />
-                                      </button>
-                                    </div>
-                                  </td>
-                                </>
-                              )}
-                            </tr>
-                          ))}
-                          {filteredData.length === 0 && (
-                            <tr>
-                              <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
-                                Nenhum registro encontrado.
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
-        </div>
         )}
 
         {!hasData && !isProcessing && !isLoading && (
-          <div className="flex flex-col items-center justify-center p-12 bg-white rounded-xl border border-slate-200 border-dashed">
-            <div className="w-16 h-16 bg-teal-50 rounded-full flex items-center justify-center mb-4 text-teal-600">
+          <div className="bg-white border border-slate-200 border-dashed rounded-2xl p-12 text-center max-w-xl mx-auto shadow-sm">
+            <div className="w-16 h-16 bg-teal-50 text-teal-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <FileSpreadsheet className="w-8 h-8" />
             </div>
-            <h2 className="text-lg font-medium text-slate-800">Nenhum dado carregado</h2>
-            <p className="text-slate-500 text-sm mt-1 max-w-sm text-center">Faça o upload de uma planilha XLSX contendo as colunas de Admissão, Classificação, Atendimento e Cor para visualizar o painel. Os dados serão salvos para as próximas visitas.</p>
+            <h3 className="text-lg font-bold text-slate-800 mb-1">Nenhum dado importado</h3>
+            <p className="text-sm text-slate-500 mb-6">
+              Envie sua planilha Excel (.xlsx) contendo as colunas de Admissão, Classificação, Atendimento, Fim do Atendimento, Cor e Médico / Profissional (Coluna F).
+            </p>
+            <label className="inline-flex items-center gap-2 px-5 py-2.5 bg-teal-600 text-white hover:bg-teal-700 rounded-xl cursor-pointer font-medium text-sm transition-all shadow-sm shadow-teal-700/20">
+              <UploadCloud className="w-4 h-4" />
+              <span>Selecionar Arquivo XLSX</span>
+              <input 
+                type="file" 
+                accept=".xlsx, .xls" 
+                onChange={handleFileUpload} 
+                className="hidden" 
+              />
+            </label>
           </div>
         )}
 
@@ -871,3 +1152,4 @@ export default function App() {
     </div>
   );
 }
+export default App;

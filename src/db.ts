@@ -24,9 +24,22 @@ db.exec(`
     atendimento TEXT,
     fimAtendimento TEXT,
     classificacao TEXT,
+    medico TEXT DEFAULT '',
     rawAdmissao TEXT,
     rawHoraClassificacao TEXT,
     rawAtendimento TEXT,
     rawFimAtendimento TEXT
   );
 `);
+
+// Migração segura para bases existentes sem quebrar dados antigos
+try {
+  const tableInfo = db.prepare("PRAGMA table_info(records)").all() as any[];
+  const hasMedico = tableInfo.some(col => col.name === 'medico');
+  if (!hasMedico) {
+    db.exec("ALTER TABLE records ADD COLUMN medico TEXT DEFAULT ''");
+  }
+} catch (e) {
+  console.log("Migration check error (ignored):", e);
+}
+

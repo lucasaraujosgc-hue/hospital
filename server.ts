@@ -32,17 +32,20 @@ async function startServer() {
 
       const stmt = db.prepare(`
         INSERT OR REPLACE INTO records (
-          id, admissao, horaClassificacao, atendimento, fimAtendimento, classificacao,
+          id, admissao, horaClassificacao, atendimento, fimAtendimento, classificacao, medico,
           rawAdmissao, rawHoraClassificacao, rawAtendimento, rawFimAtendimento
         ) VALUES (
-          @id, @admissao, @horaClassificacao, @atendimento, @fimAtendimento, @classificacao,
+          @id, @admissao, @horaClassificacao, @atendimento, @fimAtendimento, @classificacao, @medico,
           @rawAdmissao, @rawHoraClassificacao, @rawAtendimento, @rawFimAtendimento
         )
       `);
 
       const insertMany = db.transaction((rows) => {
         for (const row of rows) {
-          stmt.run(row);
+          stmt.run({
+            ...row,
+            medico: row.medico || ''
+          });
         }
       });
 
@@ -58,7 +61,7 @@ async function startServer() {
     try {
       const id = req.params.id;
       const { 
-        admissao, horaClassificacao, atendimento, fimAtendimento, classificacao,
+        admissao, horaClassificacao, atendimento, fimAtendimento, classificacao, medico,
         rawAdmissao, rawHoraClassificacao, rawAtendimento, rawFimAtendimento 
       } = req.body;
 
@@ -69,6 +72,7 @@ async function startServer() {
           atendimento = @atendimento,
           fimAtendimento = @fimAtendimento,
           classificacao = @classificacao,
+          medico = @medico,
           rawAdmissao = @rawAdmissao,
           rawHoraClassificacao = @rawHoraClassificacao,
           rawAtendimento = @rawAtendimento,
@@ -78,6 +82,7 @@ async function startServer() {
 
       stmt.run({
         id, admissao, horaClassificacao, atendimento, fimAtendimento, classificacao,
+        medico: medico || '',
         rawAdmissao, rawHoraClassificacao, rawAtendimento, rawFimAtendimento
       });
       
