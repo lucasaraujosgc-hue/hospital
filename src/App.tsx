@@ -6,14 +6,14 @@ import {
 import { 
   UploadCloud, FileSpreadsheet, Loader2, Filter, Calendar, Trash2, Settings, Download, 
   Edit2, Save, X, Search, Clock, UserCheck, Stethoscope, RotateCcw,
-  ArrowUpDown, ArrowUp, ArrowDown
+  ArrowUpDown, ArrowUp, ArrowDown, AlertCircle
 } from 'lucide-react';
 import { startOfDay, endOfDay, parseISO, format } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { 
   ProcessedRecord, processExcelData, columnOptions, getAverageWaitTimeByClassificacao, 
   getAppointmentsByClassificacao, getDailyVolumeSummary, parseCustomDate,
-  getDoctorRankingSummary, getAppointmentsByMedico
+  getDoctorRankingSummary, getAppointmentsByMedico, isValidDoctor
 } from './utils';
 
 // Tailwind colors for common classifications
@@ -58,6 +58,10 @@ export function App() {
 
   // Raw Data Search Filter
   const [searchTerm, setSearchTerm] = useState<string>('');
+
+  // Missing / Unfilled Columns Filter
+  const [missingColsFilter, setMissingColsFilter] = useState<Set<string>>(new Set());
+  const [missingColsMode, setMissingColsMode] = useState<'all' | 'any'>('all');
 
   // Doctor Ranking Table Sorting state
   const [doctorSortField, setDoctorSortField] = useState<'rank' | 'name' | 'atendimentos' | 'mediaEspera'>('rank');
@@ -124,6 +128,7 @@ export function App() {
           setData(prev => [...prev, ...processed]);
           setSelectedColors(new Set());
           setSelectedMedicos(new Set());
+          setMissingColsFilter(new Set());
           setStartDate('');
           setEndDate('');
           alert(`Importação concluída! ${processed.length} registros adicionados com sucesso.`);
@@ -144,7 +149,7 @@ export function App() {
   const uniqueColors = useMemo(() => Array.from(new Set(data.map(d => d.classificacao).filter(Boolean))).sort(), [data]);
   
   const uniqueMedicos = useMemo(() => {
-    const list = Array.from(new Set(data.map(d => d.medico || 'Não informado').filter(Boolean))).sort();
+    const list = Array.from(new Set(data.map(d => d.medico?.trim()).filter(med => isValidDoctor(med)) as string[])).sort();
     return list;
   }, [data]);
 
@@ -191,10 +196,44 @@ export function App() {
         const matchStr = `${d.classificacao} ${d.medico || ''} ${d.rawAdmissao} ${d.rawHoraClassificacao} ${d.rawAtendimento} ${d.rawFimAtendimento}`.toLowerCase();
         if (!matchStr.includes(searchLower)) return false;
       }
+
+      // Missing / Unfilled Columns Filter
+      if (missingColsFilter.size > 0) {
+        const isEmptyVal = (val?: string | null) => {
+          if (!val) return true;
+          const trimmed = val.trim().toLowerCase();
+          return trimmed === '' || trimmed === '-' || trimmed === '--' || trimmed === 'null' || trimmed === 'undefined';
+        };
+        const isColEmpty = (colId: string): boolean => {
+          switch (colId) {
+            case 'admissao':
+              return !d.admissao && isEmptyVal(d.rawAdmissao);
+            case 'horaClassificacao':
+              return !d.horaClassificacao && isEmptyVal(d.rawHoraClassificacao);
+            case 'atendimento':
+              return !d.atendimento && isEmptyVal(d.rawAtendimento);
+            case 'fimAtendimento':
+              return !d.fimAtendimento && isEmptyVal(d.rawFimAtendimento);
+            case 'classificacao':
+              return isEmptyVal(d.classificacao) || d.classificacao === 'Sem Classificação';
+            case 'medico':
+              return !isValidDoctor(d.medico);
+            default:
+              return false;
+          }
+        };
+
+        const selectedCols = Array.from(missingColsFilter) as string[];
+        if (missingColsMode === 'all') {
+          if (!selectedCols.every(colId => isColEmpty(colId))) return false;
+        } else {
+          if (!selectedCols.some(colId => isColEmpty(colId))) return false;
+        }
+      }
       
       return true;
     });
-  }, [data, selectedColors, selectedMedicos, startDate, endDate, startCol, endCol, searchTerm, minWaitTime, maxWaitTime]);
+  }, [data, selectedColors, selectedMedicos, startDate, endDate, startCol, endCol, searchTerm, minWaitTime, maxWaitTime, missingColsFilter, missingColsMode]);
 
   const hasData = data.length > 0;
   
@@ -275,6 +314,7 @@ export function App() {
   const clearAllFilters = () => {
     setSelectedColors(new Set());
     setSelectedMedicos(new Set());
+    setMissingColsFilter(new Set());
     setStartDate('');
     setEndDate('');
     setMinWaitTime('');
@@ -282,7 +322,16 @@ export function App() {
     setSearchTerm('');
   };
 
-  const hasActiveFilters = selectedColors.size > 0 || selectedMedicos.size > 0 || startDate !== '' || endDate !== '' || minWaitTime !== '' || maxWaitTime !== '' || searchTerm !== '';
+  const hasActiveFilters = selectedColors.size > 0 || selectedMedicos.size > 0 || missingColsFilter.size > 0 || startDate !== '' || endDate !== '' || minWaitTime !== '' || maxWaitTime !== '' || searchTerm !== '';
+
+  const emptyColumnOptions = [
+    { id: 'admissao', label: 'Admissão' },
+    { id: 'horaClassificacao', label: 'Classificação (Hora)' },
+    { id: 'atendimento', label: 'Atendimento' },
+    { id: 'fimAtendimento', label: 'Fim Atendimento' },
+    { id: 'classificacao', label: 'Cor' },
+    { id: 'medico', label: 'Médico / Profissional' },
+  ];
 
   const getColorHex = (name: string, index: number) => {
     return colorMap[name] || DEFAULT_COLORS[index % DEFAULT_COLORS.length];
@@ -681,6 +730,73 @@ export function App() {
 
             </div>
 
+            {/* Card 6: Missing / Unfilled Columns Filter */}
+            <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-600" /> Colunas Sem Preenchimento
+                  </h3>
+                  <span className="text-xs text-slate-400 hidden sm:inline">
+                    (Selecione uma ou mais colunas vazias para levantar os dados)
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  {missingColsFilter.size > 1 && (
+                    <div className="inline-flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => setMissingColsMode('all')}
+                        className={`px-2 py-0.5 rounded-md font-medium transition-colors ${
+                          missingColsMode === 'all'
+                            ? 'bg-white text-teal-700 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                        title="Exibir registros em que TODAS as colunas selecionadas estão sem preenchimento"
+                      >
+                        Todas vazias (E)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMissingColsMode('any')}
+                        className={`px-2 py-0.5 rounded-md font-medium transition-colors ${
+                          missingColsMode === 'any'
+                            ? 'bg-white text-teal-700 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                        title="Exibir registros em que QUALQUER UMA das colunas selecionadas está sem preenchimento"
+                      >
+                        Qualquer uma (OU)
+                      </button>
+                    </div>
+                  )}
+                  {missingColsFilter.size > 0 && (
+                    <button
+                      onClick={() => setMissingColsFilter(new Set())}
+                      className="text-[11px] text-teal-600 hover:underline font-medium"
+                    >
+                      Limpar
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {emptyColumnOptions.map(col => (
+                  <button
+                    key={col.id}
+                    onClick={() => toggleFilter(setMissingColsFilter, col.id)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                      missingColsFilter.has(col.id)
+                        ? 'bg-amber-50 border-amber-500 text-amber-800 shadow-sm font-semibold'
+                        : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                    }`}
+                  >
+                    Sem {col.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Active Filters Clear Bar */}
             {hasActiveFilters && (
               <div className="flex items-center justify-between bg-teal-50/70 border border-teal-200 px-4 py-2 rounded-xl text-xs text-teal-800">
@@ -694,6 +810,12 @@ export function App() {
                   {selectedMedicos.size > 0 && (
                     <span className="bg-white px-2 py-0.5 rounded border border-teal-200 font-medium">
                       {selectedMedicos.size} médico(s)
+                    </span>
+                  )}
+                  {missingColsFilter.size > 0 && (
+                    <span className="bg-white px-2 py-0.5 rounded border border-amber-300 text-amber-800 font-medium">
+                      Sem preenchimento ({missingColsFilter.size > 1 ? (missingColsMode === 'all' ? 'Todas: ' : 'Qualquer: ') : ''}
+                      {Array.from(missingColsFilter).map(id => emptyColumnOptions.find(o => o.id === id)?.label || id).join(', ')})
                     </span>
                   )}
                   {(startDate || endDate) && (
@@ -921,7 +1043,7 @@ export function App() {
                                 {sortedDoctorRankingData.length === 0 && (
                                   <tr>
                                     <td colSpan={3} className="px-5 py-8 text-center text-slate-500">
-                                      Nenhum dado encontrado para médicos com os filtros atuais.
+                                      Nenhum atendimento com médico informado no período ou filtro atual.
                                     </td>
                                   </tr>
                                 )}
@@ -932,28 +1054,44 @@ export function App() {
 
                         {/* Chart: Quantidade de Atendimentos por Médico */}
                         <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm flex flex-col">
-                          <h3 className="text-base font-semibold text-slate-800 mb-4">Quantidade de Atendimentos por Médico</h3>
+                          <div className="flex items-center justify-between mb-4">
+                            <div>
+                              <h3 className="text-base font-semibold text-slate-800">Quantidade de Atendimentos por Médico</h3>
+                              <p className="text-xs text-slate-500">Top médicos com maior volume (exclui registros sem médico)</p>
+                            </div>
+                            <span className="text-xs font-semibold px-2 py-0.5 rounded bg-teal-50 text-teal-700 border border-teal-200">
+                              {doctorAppointmentsData.length} médicos
+                            </span>
+                          </div>
+
                           <div className="h-[300px] flex-1">
-                            <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={doctorAppointmentsData.slice(0, 10)} margin={{ top: 10, right: 10, left: 0, bottom: 40 }}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                                <XAxis 
-                                  dataKey="name" 
-                                  tick={{ fontSize: 11, fill: '#64748b' }} 
-                                  interval={0}
-                                  angle={-25}
-                                  textAnchor="end"
-                                  axisLine={false} 
-                                  tickLine={false} 
-                                />
-                                <YAxis tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                                <RechartsTooltip 
-                                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                  cursor={{fill: '#f8fafc'}}
-                                />
-                                <Bar dataKey="atendimentos" fill="#0f766e" radius={[4, 4, 0, 0]} name="Atendimentos" />
-                              </BarChart>
-                            </ResponsiveContainer>
+                            {doctorAppointmentsData.length > 0 ? (
+                              <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={doctorAppointmentsData.slice(0, 10)} margin={{ top: 10, right: 10, left: 0, bottom: 40 }}>
+                                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                                  <XAxis 
+                                    dataKey="name" 
+                                    tick={{ fontSize: 11, fill: '#64748b' }} 
+                                    interval={0}
+                                    angle={-25}
+                                    textAnchor="end"
+                                    axisLine={false} 
+                                    tickLine={false} 
+                                  />
+                                  <YAxis tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                                  <RechartsTooltip 
+                                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                    cursor={{fill: '#f8fafc'}}
+                                  />
+                                  <Bar dataKey="atendimentos" fill="#0f766e" radius={[4, 4, 0, 0]} name="Atendimentos" />
+                                </BarChart>
+                              </ResponsiveContainer>
+                            ) : (
+                              <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm">
+                                <Stethoscope className="w-8 h-8 text-slate-300 mb-2" />
+                                <p>Nenhum atendimento com médico identificado no período.</p>
+                              </div>
+                            )}
                           </div>
                         </div>
 

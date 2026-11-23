@@ -253,10 +253,28 @@ export function getAppointmentsByClassificacao(data: ProcessedRecord[]) {
 
 // --- Aggregation Functions: Médicos / Profissionais ---
 
+export function isValidDoctor(med?: string | null): boolean {
+  if (!med) return false;
+  const clean = med.trim().toLowerCase();
+  return (
+    clean !== '' &&
+    clean !== 'não informado' &&
+    clean !== 'nao informado' &&
+    clean !== 'sem médico' &&
+    clean !== 'sem medico' &&
+    clean !== 'sem profissional' &&
+    clean !== '-' &&
+    clean !== '--' &&
+    clean !== 'null' &&
+    clean !== 'undefined'
+  );
+}
+
 export function getAppointmentsByMedico(data: ProcessedRecord[]) {
   const map = new Map<string, number>();
   data.forEach(d => {
-    const med = d.medico?.trim() || 'Não informado';
+    if (!isValidDoctor(d.medico)) return;
+    const med = d.medico.trim();
     map.set(med, (map.get(med) || 0) + 1);
   });
   return Array.from(map.entries())
@@ -271,10 +289,11 @@ export function getAverageWaitTimeByMedico(data: ProcessedRecord[], startCol: st
   const map = new Map<string, { total: number, count: number }>();
   
   data.forEach(d => {
+    if (!isValidDoctor(d.medico)) return;
     const duration = getDurationMinutes(d, startCol, endCol);
     if (duration === null) return;
     
-    const med = d.medico?.trim() || 'Não informado';
+    const med = d.medico.trim();
     if (!map.has(med)) map.set(med, { total: 0, count: 0 });
     
     const entry = map.get(med)!;
