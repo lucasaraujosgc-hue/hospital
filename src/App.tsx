@@ -164,11 +164,18 @@ export function App() {
     const minTimeNum = minWaitTime !== '' ? Number(minWaitTime) : null;
     const maxTimeNum = maxWaitTime !== '' ? Number(maxWaitTime) : null;
 
+    const isValidDateObj = (dt: Date | null | undefined): dt is Date =>
+      dt instanceof Date && !isNaN(dt.getTime());
+
     return data.filter(d => {
-      // Time Filter based on startCol
-      const recordDate = d[startCol as keyof ProcessedRecord] as Date | null;
-      if (sDate && recordDate && recordDate < sDate) return false;
-      if (eDate && recordDate && recordDate > eDate) return false;
+      // Time Filter based on startCol (fallback to other date cols only if user explicitly filtered for missing startCol)
+      let recordDate = d[startCol as keyof ProcessedRecord] as Date | null;
+      if (!isValidDateObj(recordDate) && missingColsFilter.has(startCol)) {
+        const candidates = [d.admissao, d.horaClassificacao, d.atendimento, d.fimAtendimento];
+        recordDate = candidates.find(isValidDateObj) || null;
+      }
+      if (sDate && (!isValidDateObj(recordDate) || recordDate < sDate)) return false;
+      if (eDate && (!isValidDateObj(recordDate) || recordDate > eDate)) return false;
 
       // Color Filter
       if (selectedColors.size > 0 && !selectedColors.has(d.classificacao)) return false;
